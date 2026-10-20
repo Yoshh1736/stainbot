@@ -1,5 +1,5 @@
 # language: Python, file: main.py, target: Telegram, Railway
-# *100% Modal and Inline Button driven Telegram bot — zero text typing required in chat.*
+# *Clean multi-use production bot with instant UI routing and zero external hooks.*
 
 import os
 import time
@@ -9,7 +9,8 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ConversationHandler
 
-BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
+# ⚠️ PASTE YOUR NEW BOT TOKEN FROM BOTFATHER HERE:
+BOT_TOKEN = "8619713451:AAGZjcICB64tne5C7it9BMWBk8RnULAhUOk"
 OWNER_CONTACT = "t.me/mtfeels"
 API_URL = "https://beboy-sms.vercel.app/attack"
 
@@ -45,13 +46,11 @@ SERVICES_INFO = [
 ALL_SERVICE_KEYS = [s[0] for s in SERVICES_INFO]
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.WARNING)
 
-# States for ConversationHandler
 GET_PHONE, GET_BATCHES, GET_KEY = range(3)
 
 def get_user_record(user_id):
     if user_id not in USER_DATABASE:
         USER_DATABASE[user_id] = {
-            "verified": True,
             "attempts_left": 3,
             "expiry": 0,
             "key_type": None,
