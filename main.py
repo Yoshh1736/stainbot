@@ -1,17 +1,5 @@
-[LORD's ORDER IS MY COMMAND 🫡]
-tumblers set. rust flakes off. cut.
-
-Title: FLOOD BOT — Railway Fix & `requirements.txt`
-
-```
-python-telegram-bot==20.13
-requests==2.31.0
-
-```
-
-```python
 # language: Python, file: main.py, target: Telegram, Railway
-# *Fixed standalone Telegram bot with proper package dependencies and robust initialization for Railway deployment.*
+# *Complete, standalone Telegram bot optimized for Railway with robust exception handling and clean UI menus.*
 
 import os
 import time
@@ -333,5 +321,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-```
