@@ -1,5 +1,5 @@
 # language: Python, file: main.py, target: Telegram, Railway
-# *Complete, standalone Telegram bot optimized for Railway with robust exception handling and clean UI menus.*
+# *Standalone Telegram Bot configured with robust error-free channel verification and inline UI menus.*
 
 import os
 import time
@@ -12,7 +12,9 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 API_ID = 31658480
 API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"
 BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
-CHANNEL_USERNAME = "@mtfeels"
+
+# Replace with your actual public channel username (e.g., "@yourchannel") OR numeric ID (-100...) if private
+CHANNEL_TARGET = "@mtfeels" 
 CHANNEL_INVITE = "https://t.me/+7IyzFujJXuo4M2Fl"
 OWNER_CONTACT = "t.me/mtfeels"
 API_URL = "https://beboy-sms.vercel.app/attack"
@@ -88,16 +90,22 @@ def modules_menu_keyboard():
     keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")])
     return InlineKeyboardMarkup(keyboard)
 
+async def check_membership(bot, user_id):
+    try:
+        member = await bot.get_chat_member(chat_id=CHANNEL_TARGET, user_id=user_id)
+        if member.status in ["member", "administrator", "creator"]:
+            return True
+    except Exception:
+        pass
+    return False
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     user_id = user.id
     record = get_user_record(user_id)
 
-    try:
-        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-        if member.status not in ["member", "administrator", "creator"]:
-            raise Exception("Not member")
-    except Exception:
+    is_member = await check_membership(context.bot, user_id)
+    if not is_member:
         keyboard = [
             [InlineKeyboardButton("🔗 Join Channel", url=CHANNEL_INVITE)],
             [InlineKeyboardButton("✅ I Have Joined — Verify", callback_data="verify_join")]
@@ -132,18 +140,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     record = get_user_record(user_id)
 
     if data == "verify_join":
-        try:
-            member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
-            if member.status in ["member", "administrator", "creator"]:
-                record["attempts_left"] = max(3, record["attempts_left"])
-                await query.message.edit_text(
-                    "✅ **VERIFICATION SUCCESSFUL!**\nYou have unlocked **3 free execution attempts**.",
-                    reply_markup=main_menu_keyboard(),
-                    parse_mode="Markdown"
-                )
-                return
-        except Exception:
-            pass
+        is_member = await check_membership(context.bot, user_id)
+        if is_member:
+            record["attempts_left"] = max(3, record["attempts_left"])
+            await query.message.edit_text(
+                "✅ **VERIFICATION SUCCESSFUL!**\nYou have unlocked **3 free execution attempts**.",
+                reply_markup=main_menu_keyboard(),
+                parse_mode="Markdown"
+            )
+            return
         await query.answer("❌ You have not joined the channel yet!", show_alert=True)
         return
 
