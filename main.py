@@ -12,8 +12,8 @@ from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, Callb
 API_ID = 31658480
 API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"
 BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
-CHANNEL_USERNAME = "@anonymouspumptrades"
-CHANNEL_INVITE = "https://t.me/anonymouspumptrades"
+CHANNEL_USERNAME = "@mtfeels"
+CHANNEL_INVITE = "https://t.me/+7IyzFujJXuo4M2Fl"
 OWNER_CONTACT = "t.me/mtfeels"
 API_URL = "https://beboy-sms.vercel.app/attack"
 
