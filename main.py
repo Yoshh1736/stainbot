@@ -15,8 +15,9 @@ REQUIRED_CHANNEL = "@Inw7l0sCM81mYzE1"
 # ================= DATABASE / STORAGE (Mock) =================
 user_subscriptions = {}  # { user_id: expiry_datetime }
 user_attempts = {}       # { user_id: remaining_free_attempts }
+user_targets = {}        # { user_id: {"target": phone, "service": type} }
 
-# Custom access keys categorized by duration
+# Custom access keys categorized by duration (Private keys managed by admin)
 VALID_KEYS = {
     "STAIN-7DAYS-PRO77": {"days": 7, "tier": "7 Days Access"},
     "STAIN-1MONTH-VIP30": {"days": 30, "tier": "1 Month Access"},
@@ -88,10 +89,10 @@ async def start_command(client: Client, message: Message):
 @app.on_message(filters.command("help"))
 async def help_command(client: Client, message: Message):
     help_text = (
-        "🛠️ **𝗙𝗟𝗢𝗢𝘿 𝗕𝗢𝗧 — 𝗢𝗣𝗘𝗥𝗔𝗧𝗜𝗢𝗡𝗔𝗟 𝗚𝗨𝗜𝗗𝗘**\n\n"
+        "🛠️ **𝗙𝗟𝗢𝗢𝗗 𝗕𝗢𝗧 — 𝗢𝗣𝗘𝗥𝗔𝗧𝗜𝗢𝗡𝗔𝗟 𝗚𝗨𝗜𝗗𝗘**\n\n"
         "• **Free Access:** New operators receive **3 free execution attempts** automatically upon starting the bot.\n"
-        "• **Redeeming Keys:** Bought an access key? Use `/redeem <YOUR_KEY>` or click the **Redeem Key** button in the main menu to activate your tier.\n"
-        "• **Execution:** Go to `Launch Flood`, input target parameters, and let the system handle the workload.\n\n"
+        "• **Execution:** Go to `Launch Flood`, select your service module (SMS, Call Voice, OTP, Payload), input the target number, and launch.\n"
+        "• **Redeeming Keys:** Contact admin to avail an access key, then use `/redeem <YOUR_KEY>` or click the **Redeem Key** button to activate your tier.\n\n"
         "💡 *Need assistance or want to purchase a key? Contact administration.*"
     )
     await message.reply_text(help_text)
@@ -139,6 +140,44 @@ async def redeem_command(client: Client, message: Message):
     else:
         await message.reply_text("❌ **Invalid or expired access key.** Verify your sequence and try again.")
 
+# ================= TEXT INPUT HANDLER FOR TARGETS =================
+@app.on_message(filters.text & ~filters.command(["start", "help", "redeem"]))
+async def handle_target_input(client: Client, message: Message):
+    user_id = message.from_user.id
+    
+    # Check if user is waiting to input a target number for a service
+    if user_id in user_targets:
+        service_type = user_targets[user_id]
+        target_number = message.text.strip()
+        
+        # Clear the waiting state
+        del user_targets[user_id]
+        
+        if not check_access(user_id):
+            await message.reply_text("❌ **Access Denied!** No free attempts or active key found. Please redeem a key.")
+            return
+
+        # Deduct free attempt if not subscribed
+        if user_id not in user_subscriptions:
+            if user_id in user_attempts and user_attempts[user_id] > 0:
+                user_attempts[user_id] -= 1
+
+        remaining_display = get_remaining_text(user_id)
+        
+        # Execution confirmation message
+        await message.reply_text(
+            f"⚡ **𝗘𝗫𝗘𝗖𝗨𝗧𝗜𝗢𝗡 𝗜𝗡 𝗣𝗥𝗢𝗚𝗥𝗘𝗦𝗦...**\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"🎯 **Target:** `{target_number}`\n"
+            f"📡 **Module:** `{service_type}`\n"
+            f"📊 Status: `Payload successfully dispatched.`\n"
+            f"🔮 `{remaining_display}`\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
 # ================= CALLBACK HANDLERS =================
 @app.on_callback_query()
 async def callback_router(client: Client, callback_query: CallbackQuery):
@@ -146,6 +185,9 @@ async def callback_router(client: Client, callback_query: CallbackQuery):
     user_id = callback_query.from_user.id
 
     if data == "menu_main":
+        if user_id in user_targets:
+            del user_targets[user_id]
+            
         status_str = get_remaining_text(user_id)
         ui_caption = (
             f"⚡ 𝙁 𝙇 𝙊 𝙊 𝘿   𝘽 𝙊 𝙏 ⚡\n"
@@ -172,38 +214,43 @@ async def callback_router(client: Client, callback_query: CallbackQuery):
 
         status_msg = get_remaining_text(user_id)
         await callback_query.message.edit_text(
-            f"💥 **𝗙𝗟𝗢𝗢𝘿 𝗖𝗢𝗡𝗦𝗢𝗟𝗘**\n"
+            f"💥 **𝗙𝗟𝗢𝗢𝘿 𝗖𝗢𝗡𝗦𝗢𝗟𝗘 — 𝗦𝗘𝗟𝗘𝗖𝗧 𝗠𝗢𝗗𝗨𝗟𝗘**\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             f"📊 `{status_msg}`\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"🎯 *System ready. Send target parameters or select a module below.*",
+            f"🎯 *Choose the execution service vector below:*",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚡ Run SMS/Call Sequence", callback_data="run_action")],
+                [InlineKeyboardButton("📨 SMS Flood Service", callback_data="srv_sms")],
+                [InlineKeyboardButton("📞 Call Voice Service", callback_data="srv_call")],
+                [InlineKeyboardButton("🔐 OTP Bomber Service", callback_data="srv_otp")],
+                [InlineKeyboardButton("💣 Custom Payload Service", callback_data="srv_payload")],
                 [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
             ])
         )
 
-    elif data == "run_action":
+    elif data.startswith("srv_"):
         if not check_access(user_id):
             await callback_query.answer("❌ Limit reached! Please upgrade or redeem a key.", show_alert=True)
             return
 
-        # Deduct free attempt if not subscribed
-        if user_id not in user_subscriptions:
-            if user_id in user_attempts and user_attempts[user_id] > 0:
-                user_attempts[user_id] -= 1
-
-        remaining_display = get_remaining_text(user_id)
-        await callback_query.answer("🚀 Execution sequence initialized successfully!", show_alert=True)
+        service_map = {
+            "srv_sms": "SMS Flood",
+            "srv_call": "Call Voice",
+            "srv_otp": "OTP Bomber",
+            "srv_payload": "Custom Payload"
+        }
         
+        selected_service = service_map.get(data, "Unknown Service")
+        user_targets[user_id] = selected_service
+
         await callback_query.message.edit_text(
-            f"⚙️ **𝗘𝗫𝗘𝗖𝗨𝗧𝗜𝗢𝗡 𝗜𝗡 𝗣𝗥𝗢𝗚𝗥𝗘𝗦𝗦...**\n"
+            f"🎯 **𝗧𝗔𝗥𝗚𝗘𝗧 𝗜𝗡𝗣𝗨𝗧 — {selected_service.upper()}**\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            f"📡 Status: `Payload dispatched.`\n"
-            f"📊 `{remaining_display}`\n"
+            f"⌨️ *Please reply directly in chat with the target phone number or details.*\n\n"
+            f"💬 *Example:* `+639123456789`\n"
             f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="menu_main")]
+                [InlineKeyboardButton("❌ Cancel", callback_data="menu_flood")]
             ])
         )
 
@@ -212,13 +259,13 @@ async def callback_router(client: Client, callback_query: CallbackQuery):
             "💎 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗧𝗜𝗘𝗥𝗦 & 𝗣𝗥𝗜𝗖𝗜𝗡𝗚**\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             "🗓️ **7 Days Access**\n"
-            "└ 💵 `₱150` | Key: `STAIN-7DAYS-PRO77`\n\n"
+            "└ 💵 `₱100`\n\n"
             "🗓️ **1 Month Access**\n"
-            "└ 💵 `₱500` | Key: `STAIN-1MONTH-VIP30`\n\n"
+            "└ 💵 `₱150`\n\n"
             "♾️ **Lifetime Access**\n"
-            "└ 💵 `₱10,000` | Key: `STAIN-LIFETIME-ULTRA`\n"
+            "└ 💵 `₱199`\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
-            "💡 *Purchase keys from admin, then choose 'Redeem Key' to activate.*"
+            "💡 *Access keys are private. Avail your key directly from admin first, then choose 'Redeem Key' to activate.*"
         )
         await callback_query.message.edit_text(
             pricing_text,
@@ -246,7 +293,8 @@ async def callback_router(client: Client, callback_query: CallbackQuery):
             "📖 **𝗢𝗣𝗘𝗥𝗔𝗧𝗜𝗢𝗡𝗔𝗟 𝗜𝗡𝗦𝗧𝗥𝗨𝗖𝗧𝗜𝗢𝗡𝗦**\n"
             "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
             "• **Free Tiers:** Every new operator gets **3 free attempts** to test system features.\n"
-            "• **Access Control:** Once free attempts are exhausted, a key must be redeemed.\n"
+            "• **Services:** Select from SMS, Call Voice, OTP, or Payload modules and supply your target number.\n"
+            "• **Access Control:** Once free attempts are exhausted, acquire a private key from admin and redeem it.\n"
             "• **Commands:**\n"
             "  - `/start` - Open dashboard\n"
             "  - `/help` - View quick guide\n"
