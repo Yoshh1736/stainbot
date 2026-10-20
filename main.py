@@ -1,225 +1,266 @@
-"""
-STA!N.EXE — Telegram Premium Bot Edition
-Owner: stain
-Contact: t.me/mtfeels
-Hosting Target: PythonAnywhere
-Requirements: pip install pyrogram tgcrypto requests
-"""
-
-import time
-import requests
+import os
+import asyncio
+from datetime import datetime, timedelta
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Message, CallbackQuery
 
-# ─── CONFIGURATION & CREDENTIALS ───────────────────────────────────
-API_ID = 31658480       # Replace with your Telegram API_ID
-API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"  # Replace with your Telegram API_HASH
-BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM" # Replace with your Telegram Bot Token
+# ================= CONFIGURATION =================
+API_ID = 31658480
+API_HASH = "9becba7687e9d33c9e201dbcf1e13e52"
+BOT_TOKEN = "8947812851:AAHaYiJEhwZrDB-Z0oUPMO989Bs-Wbv0XgM"
 
-REQUIRED_CHANNEL = "https://t.me/+Inw7l0sCM81mYzE1"
-CHANNEL_USERNAME = "Inw7l0sCM81mYzE1" # For check chat member or join gate
-OWNER_CONTACT = "https://t.me/mtfeels"
-API_URL = "https://beboy-sms.vercel.app/attack"
+# Required Channel for Referral Gating
+REQUIRED_CHANNEL = "@Inw7l0sCM81mYzE1"
 
-# In-memory mock database (Use SQLite/JSON for PythonAnywhere production persistence)
-USERS_DB = {} 
-# User schema: { user_id: { "referred": bool, "free_uses": int, "access_type": str, "expiry": float } }
+# ================= DATABASE / STORAGE (Mock) =================
+user_subscriptions = {}  # { user_id: expiry_datetime }
+user_attempts = {}       # { user_id: remaining_free_attempts }
 
-PRICES = {
-    "7d": "7 Days Access — $2 / ₱100",
-    "1m": "1 Month Access — $3 / ₱150",
-    "30m": "30 Months Access — $6 / ₱350",
-    "lifetime": "Lifetime Access — $8 / ₱500"
+# Custom access keys categorized by duration
+VALID_KEYS = {
+    "STAIN-7DAYS-PRO77": {"days": 7, "tier": "7 Days Access"},
+    "STAIN-1MONTH-VIP30": {"days": 30, "tier": "1 Month Access"},
+    "STAIN-LIFETIME-ULTRA": {"days": 99999, "tier": "Lifetime Access"}
 }
 
-app = Client("stain_exe_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+app = Client(
+    "stain_flood_bot",
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
+)
 
-# ─── /START & REFERRAL GATEWAY ─────────────────────────────────────
+# ================= HELPER FUNCTIONS =================
+def check_access(user_id: int) -> bool:
+    """Check if user has an active subscription or remaining free attempts."""
+    if user_id in user_subscriptions:
+        if datetime.now() < user_subscriptions[user_id]:
+            return True
+        else:
+            del user_subscriptions[user_id] # Expired
+            
+    # Check free attempts
+    attempts = user_attempts.get(user_id, 3)
+    return attempts > 0
+
+def get_remaining_text(user_id: int) -> str:
+    if user_id in user_subscriptions:
+        expiry = user_subscriptions[user_id]
+        if expiry == datetime.max:
+            return "♾️ LIFETIME VIP"
+        return f"⏳ Expires: {expiry.strftime('%b %d, %Y - %H:%M')}"
+    else:
+        attempts = user_attempts.get(user_id, 3)
+        return f"⚡ Free Trials Left: {attempts}/3"
+
+# ================= MAIN INTERFACE & COMMANDS =================
 @app.on_message(filters.command("start"))
-def start_command(client, message):
+async def start_command(client: Client, message: Message):
+    user = message.from_user
+    user_id = user.id
+    
+    if user_id not in user_attempts and user_id not in user_subscriptions:
+        user_attempts[user_id] = 3  # Give 3 free attempts to new users
+
+    status_str = get_remaining_text(user_id)
+
+    ui_caption = (
+        f"⚡ 𝙁 𝙇 𝙊 𝙊 𝘿   𝘽 𝙊 𝙏 ⚡\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"👤 **Operator:** `{user.first_name}`\n"
+        f"🔮 **Status:** `{status_str}`\n"
+        f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+        f"⚙️ *Welcome to the ultimate execution hub.*\n"
+        f"*Select an option below to deploy operations or manage keys.*"
+    )
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("💥 𝗟𝗔𝗨𝗡𝗖𝗛 𝗙𝗟𝗢𝗢𝗗", callback_data="menu_flood")],
+        [
+            InlineKeyboardButton("💎 𝗣𝗥𝗜𝗖𝗜𝗡𝗚", callback_data="menu_pricing"),
+            InlineKeyboardButton("🔑 𝗥𝗘𝗗𝗘𝗘𝗠 𝗞𝗘𝗬", callback_data="menu_redeem")
+        ],
+        [InlineKeyboardButton("📖 𝗛𝗘𝗟𝗣 & 𝗚𝗨𝗜𝗗𝗘", callback_data="menu_help")]
+    ])
+
+    await message.reply_text(ui_caption, reply_markup=keyboard)
+
+@app.on_message(filters.command("help"))
+async def help_command(client: Client, message: Message):
+    help_text = (
+        "🛠️ **𝗙𝗟𝗢𝗢𝘿 𝗕𝗢𝗧 — 𝗢𝗣𝗘𝗥𝗔𝗧𝗜𝗢𝗡𝗔𝗟 𝗚𝗨𝗜𝗗𝗘**\n\n"
+        "• **Free Access:** New operators receive **3 free execution attempts** automatically upon starting the bot.\n"
+        "• **Redeeming Keys:** Bought an access key? Use `/redeem <YOUR_KEY>` or click the **Redeem Key** button in the main menu to activate your tier.\n"
+        "• **Execution:** Go to `Launch Flood`, input target parameters, and let the system handle the workload.\n\n"
+        "💡 *Need assistance or want to purchase a key? Contact administration.*"
+    )
+    await message.reply_text(help_text)
+
+@app.on_message(filters.command("redeem"))
+async def redeem_command(client: Client, message: Message):
     user_id = message.from_user.id
+    args = message.text.split()
     
-    if user_id not in USERS_DB:
-        USERS_DB[user_id] = {
-            "referred": False,
-            "free_uses": 3,
-            "access_type": "Free Trial",
-            "expiry": time.time() + 86400 * 3
-        }
-
-    user = USERS_DB[user_id]
-
-    if not user["referred"]:
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔗 JOIN REQUIRED CHANNEL", url=REQUIRED_CHANNEL)],
-            [InlineKeyboardButton("✅ VERIFY MEMBERSHIP", callback_data="verify_join")]
-        ])
-        message.reply_text(
-            f"**STA!N.EXE — GATEWAY SECURITY**\n\n"
-            f"**OWNER:** stain\n"
-            f"**CONTACT:** {OWNER_CONTACT}\n\n"
-            f"**[!] ACCESS RESTRICTED:** You must join our official telegram channel to initialize your hardware profile and bypass system lockdown.",
-            reply_markup=keyboard
-        )
-    else:
-        show_main_menu(message)
-
-
-@app.on_callback_query(filters.regex("verify_join"))
-def verify_join(client, callback_query):
-    user_id = callback_query.from_user.id
-    # In production, check via client.get_chat_member(CHANNEL_USERNAME, user_id)
-    USERS_DB[user_id]["referred"] = True
-    
-    callback_query.message.edit_text(
-        "**[+] MEMBERSHIP VERIFIED.**\n"
-        "Hardware handshake confirmed. Welcome to **STA!N.EXE**.\n"
-        "You have been granted **3 Free Executions** before key activation is required.",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🚀 LAUNCH DASHBOARD", callback_data="main_menu")]
-        ])
-    )
-
-
-# ─── MAIN MENU & TUTORIALS ─────────────────────────────────────────
-@app.on_callback_query(filters.regex("main_menu"))
-def main_menu_callback(client, callback_query):
-    show_main_menu(callback_query.message, edit=True)
-
-def show_main_menu(message, edit=False):
-    text = (
-        f"**STA!N.EXE — PRO TERMINAL INTERFACE**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"**OWNER:** `stain` | **CONTACT:** `t.me/mtfeels`\n"
-        f"Select a module below to execute deployment vectors:\n"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📞 VOICE DISPATCH [CALL]", callback_data="mod_call"), InlineKeyboardButton("Tutorial", callback_data="tut_call")],
-        [InlineKeyboardButton("✉️ CUSTOM PAYLOAD [SMS]", callback_data="mod_sms"), InlineKeyboardButton("Tutorial", callback_data="tut_sms")],
-        [InlineKeyboardButton("🔐 OTP FLOODER [S5]", callback_data="mod_otp"), InlineKeyboardButton("Tutorial", callback_data="tut_otp")],
-        [InlineKeyboardButton("📊 ACCOUNT STATS & TRACKER", callback_data="user_stats")],
-        [InlineKeyboardButton("🔑 PURCHASE ACCESS KEY", callback_data="buy_access")]
-    ])
-    
-    if edit:
-        message.edit_text(text, reply_markup=keyboard)
-    else:
-        message.reply_text(text, reply_markup=keyboard)
-
-
-# ─── MODULE TUTORIALS & GUIDES ─────────────────────────────────────
-@app.on_callback_query(filters.regex("^tut_"))
-def show_tutorial(client, callback_query):
-    mod = callback_query.data.split("_")[1]
-    guides = {
-        "call": "**[TUTORIAL: VOICE DISPATCH]**\n\n1. Select target phone number format (+639...)\n2. Sets automated voice loops to target.\n3. Monitor progress bar until completion.",
-        "sms": "**[TUTORIAL: CUSTOM SMS]**\n\n1. Input target digits.\n2. Write custom payload message header.\n3. Dispatches via multi-gateway API nodes.",
-        "otp": "**[TUTORIAL: OTP FLOODER]**\n\n1. Targets financial and verification endpoints.\n2. Floods target device with concurrent request batches."
-    }
-    callback_query.message.edit_text(
-        guides.get(mod, "Guide unavailable."),
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« BACK TO MENU", callback_data="main_menu")]])
-    )
-
-
-# ─── STATS & TRACKER ───────────────────────────────────────────────
-@app.on_callback_query(filters.regex("user_stats"))
-def user_stats(client, callback_query):
-    user_id = callback_query.from_user.id
-    user = USERS_DB.get(user_id, {"free_uses": 0, "access_type": "Expired", "expiry": 0})
-    
-    status_text = "🟢 ACTIVE" if user["expiry"] > time.time() else "🔴 EXPIRED"
-    
-    text = (
-        f"**STA!N.EXE — USER TRACKER**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"👤 **USER ID:** `{user_id}`\n"
-        f"🎟️ **ACCESS TIER:** `{user['access_type']}`\n"
-        f"⚡ **FREE USES LEFT:** `{user['free_uses']} / 3`\n"
-        f"📡 **STATUS:** {status_text}\n"
-    )
-    
-    keyboard = [
-        [InlineKeyboardButton("🔑 BUY ACCESS KEY", callback_data="buy_access")],
-        [InlineKeyboardButton("« BACK TO MENU", callback_data="main_menu")]
-    ]
-    
-    if user["expiry"] <= time.time():
-        keyboard.insert(0, [InlineKeyboardButton("⚠️ RENEW SUBSCRIPTION NOW", url=OWNER_CONTACT)])
-
-    callback_query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-
-# ─── ACCESS KEY PRICING MENU ───────────────────────────────────────
-@app.on_callback_query(filters.regex("buy_access"))
-def buy_access(client, callback_query):
-    text = (
-        f"**STA!N.EXE — ACCESS KEY LICENSING**\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Select your license duration below. Clicking any package will route you directly to the owner for key generation and hardware binding.\n\n"
-        f"• **7 Days:** `{PRICES['7d']}`\n"
-        f"• **1 Month:** `{PRICES['1m']}`\n"
-        f"• **30 Months:** `{PRICES['30m']}`\n"
-        f"• **Lifetime:** `{PRICES['lifetime']}`\n"
-    )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🛒 BUY 7 DAYS", url=OWNER_CONTACT)],
-        [InlineKeyboardButton("🛒 BUY 1 MONTH", url=OWNER_CONTACT)],
-        [InlineKeyboardButton("🛒 BUY 30 MONTHS", url=OWNER_CONTACT)],
-        [InlineKeyboardButton("🛒 BUY LIFETIME", url=OWNER_CONTACT)],
-        [InlineKeyboardButton("« BACK TO MENU", callback_data="main_menu")]
-    ])
-    callback_query.message.edit_text(text, reply_markup=keyboard)
-
-
-# ─── EXECUTION HANDLER WITH LIVE PROGRESS BAR ──────────────────────
-@app.on_callback_query(filters.regex("^mod_"))
-def execute_module(client, callback_query):
-    user_id = callback_query.from_user.id
-    user = USERS_DB.get(user_id, {"free_uses": 0, "access_type": "Free Trial", "expiry": 0})
-    
-    # Check limit logic
-    if user["access_type"] == "Free Trial" and user["free_uses"] <= 0 and user["expiry"] < time.time():
-        callback_query.message.edit_text(
-            "**[!] LIMIT REACHED:** You have exhausted your 3 free executions.\n"
-            "Please purchase an access key to continue using **STA!N.EXE**.",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔑 BUY ACCESS KEY", callback_data="buy_access")],
-                [InlineKeyboardButton("« BACK", callback_data="main_menu")]
-            ])
+    if len(args) < 2:
+        await message.reply_text(
+            "⚠️ **Format Error:**\n"
+            "Please provide your key alongside the command.\n\n"
+            "💬 *Example:* `/redeem STAIN-7DAYS-PRO77`"
         )
         return
 
-    if user["access_type"] == "Free Trial":
-        USERS_DB[user_id]["free_uses"] -= 1
+    key = args[1].strip()
 
-    msg = callback_query.message.edit_text("**[>] INITIALIZING DISPATCH PIPELINE...**")
-    
-    # Live Progress Bar Simulation
-    total_blocks = 20
-    for i in range(1, total_blocks + 1):
-        filled = "#" * i
-        empty = "-" * (total_blocks - i)
-        pct = int((i / total_blocks) * 100)
-        time.sleep(0.15)
-        try:
-            msg.edit_text(
-                f"**STA!N.EXE — LIVE EXECUTION RUNNING**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"[{filled}{empty}] {pct}%\n"
-                f"Status: Transmitting data packets..."
-            )
-        except Exception:
-            pass
+    if key in VALID_KEYS:
+        data = VALID_KEYS[key]
+        days = data["days"]
+        tier_name = data["tier"]
 
-    msg.edit_text(
-        "**[+] EXECUTION SEQUENCE COMPLETED**\n"
-        "All targeted pulses dispatched successfully.\n"
-        f"Remaining Free Uses: `{max(0, USERS_DB[user_id]['free_uses'])}`",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« RETURN TO MENU", callback_data="main_menu")]])
-    )
+        if days >= 9999:
+            user_subscriptions[user_id] = datetime.max
+            expiry_str = "♾️ Lifetime Access"
+        else:
+            expiry_date = datetime.now() + timedelta(days=days)
+            user_subscriptions[user_id] = expiry_date
+            expiry_str = expiry_date.strftime('%B %d, %Y - %H:%M')
 
+        # Clear free attempts since they upgraded
+        if user_id in user_attempts:
+            del user_attempts[user_id]
 
+        await message.reply_text(
+            f"✅ **𝗔𝗖𝗖𝗘𝗦𝗦 𝗚𝗥𝗔𝗡𝗧𝗘𝗗 𝗦𝗨𝗖𝗖𝗘𝗦𝗦𝗙𝗨𝗟𝗟𝗬**\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"🎖️ **Tier Unlocked:** `{tier_name}`\n"
+            f"⏳ **Valid Until:** `{expiry_str}`\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"🚀 *All system restraints removed. Ready for deployment.*"
+        )
+    else:
+        await message.reply_text("❌ **Invalid or expired access key.** Verify your sequence and try again.")
+
+# ================= CALLBACK HANDLERS =================
+@app.on_callback_query()
+async def callback_router(client: Client, callback_query: CallbackQuery):
+    data = callback_query.data
+    user_id = callback_query.from_user.id
+
+    if data == "menu_main":
+        status_str = get_remaining_text(user_id)
+        ui_caption = (
+            f"⚡ 𝙁 𝙇 𝙊 𝙊 𝘿   𝘽 𝙊 𝙏 ⚡\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"🔮 **Status:** `{status_str}`\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"⚙️ *Welcome to the ultimate execution hub.*\n"
+            f"*Select an option below to deploy operations or manage keys.*"
+        )
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("💥 𝗟𝗔𝗨𝗡𝗖𝗛 𝗙𝗟𝗢𝗢𝗗", callback_data="menu_flood")],
+            [
+                InlineKeyboardButton("💎 𝗣𝗥𝗜𝗖𝗜𝗡𝗚", callback_data="menu_pricing"),
+                InlineKeyboardButton("🔑 𝗥𝗘𝗗𝗘𝗘𝗠 𝗞𝗘𝗬", callback_data="menu_redeem")
+            ],
+            [InlineKeyboardButton("📖 𝗛𝗘𝗟𝗣 & 𝗚𝗨𝗜𝗗𝗘", callback_data="menu_help")]
+        ])
+        await callback_query.message.edit_text(ui_caption, reply_markup=keyboard)
+
+    elif data == "menu_flood":
+        if not check_access(user_id):
+            await callback_query.answer("❌ Access Denied! No free attempts or active key found.", show_alert=True)
+            return
+
+        status_msg = get_remaining_text(user_id)
+        await callback_query.message.edit_text(
+            f"💥 **𝗙𝗟𝗢𝗢𝘿 𝗖𝗢𝗡𝗦𝗢𝗟𝗘**\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"📊 `{status_msg}`\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"🎯 *System ready. Send target parameters or select a module below.*",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚡ Run SMS/Call Sequence", callback_data="run_action")],
+                [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
+    elif data == "run_action":
+        if not check_access(user_id):
+            await callback_query.answer("❌ Limit reached! Please upgrade or redeem a key.", show_alert=True)
+            return
+
+        # Deduct free attempt if not subscribed
+        if user_id not in user_subscriptions:
+            if user_id in user_attempts and user_attempts[user_id] > 0:
+                user_attempts[user_id] -= 1
+
+        remaining_display = get_remaining_text(user_id)
+        await callback_query.answer("🚀 Execution sequence initialized successfully!", show_alert=True)
+        
+        await callback_query.message.edit_text(
+            f"⚙️ **𝗘𝗫𝗘𝗖𝗨𝗧𝗜𝗢𝗡 𝗜𝗡 𝗣𝗥𝗢𝗚𝗥𝗘𝗦𝗦...**\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            f"📡 Status: `Payload dispatched.`\n"
+            f"📊 `{remaining_display}`\n"
+            f"▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Back to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
+    elif data == "menu_pricing":
+        pricing_text = (
+            "💎 **𝗔𝗖𝗖𝗘𝗦𝗦 𝗧𝗜𝗘𝗥𝗦 & 𝗣𝗥𝗜𝗖𝗜𝗡𝗚**\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            "🗓️ **7 Days Access**\n"
+            "└ 💵 `₱150` | Key: `STAIN-7DAYS-PRO77`\n\n"
+            "🗓️ **1 Month Access**\n"
+            "└ 💵 `₱500` | Key: `STAIN-1MONTH-VIP30`\n\n"
+            "♾️ **Lifetime Access**\n"
+            "└ 💵 `₱10,000` | Key: `STAIN-LIFETIME-ULTRA`\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            "💡 *Purchase keys from admin, then choose 'Redeem Key' to activate.*"
+        )
+        await callback_query.message.edit_text(
+            pricing_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔑 Redeem Key Now", callback_data="menu_redeem")],
+                [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
+    elif data == "menu_redeem":
+        await callback_query.message.edit_text(
+            "🔑 **𝗞𝗘𝗬 𝗥𝗘𝗗𝗘𝗠𝗣𝗧𝗜𝗢𝗡 𝗣𝗢𝗥𝗧𝗔𝗟**\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            "To activate your purchased tier, send the command in chat format:\n\n"
+            "💬 `/redeem <YOUR_ACCESS_KEY>`\n\n"
+            "*Example:*\n`/redeem STAIN-7DAYS-PRO77`\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
+    elif data == "menu_help":
+        help_text = (
+            "📖 **𝗢𝗣𝗘𝗥𝗔𝗧𝗜𝗢𝗡𝗔𝗟 𝗜𝗡𝗦𝗧𝗥𝗨𝗖𝗧𝗜𝗢𝗡𝗦**\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬\n"
+            "• **Free Tiers:** Every new operator gets **3 free attempts** to test system features.\n"
+            "• **Access Control:** Once free attempts are exhausted, a key must be redeemed.\n"
+            "• **Commands:**\n"
+            "  - `/start` - Open dashboard\n"
+            "  - `/help` - View quick guide\n"
+            "  - `/redeem <key>` - Activate key\n"
+            "▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬"
+        )
+        await callback_query.message.edit_text(
+            help_text,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Return to Dashboard", callback_data="menu_main")]
+            ])
+        )
+
+# ================= STARTUP =================
 if __name__ == "__main__":
-    print("[+] STA!N.EXE Telegram Bot Online. Deploying polling loop...")
+    print("[+] FLOOD BOT Online. Deploying polling loop...")
     app.run()
